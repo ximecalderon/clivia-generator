@@ -1,50 +1,104 @@
-# do not forget to require your gem dependencies
-# do not forget to require_relative your local dependencies
+require "terminal-table"
+require "httparty"
+require "htmlentities"
+require "json"
+require_relative "presenter"
+require_relative "requester"
 
 class CliviaGenerator
-  # maybe we need to include a couple of modules?
+  include Presenter
+  include Requester
 
   def initialize
-    # we need to initialize a couple of properties here
+    input = ARGV.shift
+    @filename = input.nil? ? "scores.json" : input
+    @questions = []
+    @user_score = 0
   end
 
   def start
-    # welcome message
-    # prompt the user for an action
-    # keep going until the user types exit
+    print_welcome
+    action = ""
+    until action == "exit"
+      action = select_main_menu_action
+      case action
+      when "random" then random_trivia
+      when "scores" then print_scores
+      when "exit" then puts "Thanks for using CLIvia Generator"
+      end
+    end
   end
 
   def random_trivia
-    # load the questions from the api
-    # questions are loaded, then let's ask them
+    @questions = load_questions
+    ask_questions
+    print_welcome
   end
 
   def ask_questions
-    # ask each question
-    # if response is correct, put a correct message and increase score
-    # if response is incorrect, put an incorrect message, and which was the correct answer
-    # once the questions end, show user's score and promp to save it
+    @questions.each do |question|
+      response = ask_question(question)
+      if response == question[:correct_answer]
+        puts "#{response}... Correct!"
+        @user_score += 10
+      else
+        puts "#{response}... Incorrect!"
+        puts "The correct answer was: #{question[:correct_answer]}"
+      end
+    end
+    print_score(@user_score)
+    data = will_save?(@user_score)
+    save(data) unless data.nil?
+    @user_score = 0
   end
 
   def save(data)
-    # write to file the scores data
+    scores = parse_scores
+    scores.push(data)
+    File.write(@filename, scores.to_json)
   end
 
   def parse_scores
-    # get the scores data from file
+    File.open(@filename, "a+") do |f|
+      f.write("[]") if f.read == ""
+    end
+
+    JSON.parse(File.read(@filename), { symbolize_names: true })
   end
 
   def load_questions
-    # ask the api for a random set of questions
-    # then parse the questions
+    response = HTTParty.get("https://opentdb.com/api.php?amount=10")
+    parse_questions(response)
   end
 
-  def parse_questions
-    # questions came with an unexpected structure, clean them to make it usable for our purposes
+  def parse_questions(response)
+    questions = JSON.parse(response.body, symbolize_names: true)
+    questions = questions[:results]
+    coder = HTMLEntities.new
+    questions.map do |question|
+      question[:category] = coder.decode(question[:category])
+      question[:type] = coder.decode(question[:type])
+      question[:difficulty] = coder.decode(question[:difficulty])
+      question[:question] = coder.decode(question[:question])
+      question[:correct_answer] = coder.decode(question[:correct_answer])
+      question[:incorrect_answers] = question[:incorrect_answers].map do |item|
+        coder.decode(item)
+      end
+      question
+    end
   end
 
   def print_scores
-    # print the scores sorted from top to bottom
+    scores = parse_scores.sort_by { |hash| hash[:score] }
+    scores.reverse!
+    table = Terminal::Table.new
+    table.title = "Top Scores"
+    table.headings = ["Name", "Score"]
+    table.rows = scores.map do |score|
+      [score[:name], score[:score]]
+    end
+    puts table
+    print_welcome
   end
 end
 
